@@ -1,0 +1,163 @@
+# 感情ベース音楽推薦アプリ - クラス設計
+
+## 要件まとめ
+
+### Spotify API設定
+- **認証方式**: Authorization Code Flow
+- **必要スコープ**: 
+  - `playlist-modify-public`
+  - `playlist-modify-private` 
+  - `user-library-read`
+- **認証情報保存**: セッション中のみ（一時的）
+
+### 機能要件
+- **感情入力**: テキスト入力（嬉しい、悲しい、ロマンティックなど）
+- **楽曲推薦**: 10曲程度、Audio Features + ジャンルベース
+- **プレイリスト作成**: 
+  - 名前自動生成（感情+日付）
+  - Private設定
+  - 説明文なし
+
+## クラス構成
+
+### 1. SpotifyAuthenticator
+**責任**: Spotify認証とトークン管理
+```python
+class SpotifyAuthenticator:
+    def __init__(self, client_id, client_secret, redirect_uri)
+    def get_authorization_url(self) -> str
+    def get_access_token(self, authorization_code: str) -> dict
+    def refresh_token(self, refresh_token: str) -> dict
+    def is_token_valid(self, token_info: dict) -> bool
+```
+
+### 2. EmotionAnalyzer  
+**責任**: テキスト感情入力の解析と音楽特徴量への変換
+```python
+class EmotionAnalyzer:
+    def __init__(self)
+    def analyze_emotion(self, emotion_text: str) -> dict
+    def emotion_to_audio_features(self, emotion: str) -> dict
+    def get_genre_recommendations(self, emotion: str) -> list
+    
+    # 内部メソッド
+    def _normalize_emotion(self, emotion_text: str) -> str
+    def _map_emotion_to_features(self, emotion: str) -> dict
+```
+
+### 3. SpotifyMusicRecommender
+**責任**: Spotify APIを使った楽曲推薦
+```python
+class SpotifyMusicRecommender:
+    def __init__(self, spotify_client)
+    def get_recommendations(self, audio_features: dict, genres: list, limit: int = 10) -> list
+    def search_tracks_by_genre(self, genre: str, limit: int = 50) -> list
+    def get_track_audio_features(self, track_ids: list) -> list
+    def filter_tracks_by_features(self, tracks: list, target_features: dict) -> list
+```
+
+### 4. PlaylistManager
+**責任**: プレイリストの作成と管理
+```python
+class PlaylistManager:
+    def __init__(self, spotify_client)
+    def create_playlist(self, user_id: str, emotion: str, track_ids: list) -> dict
+    def generate_playlist_name(self, emotion: str) -> str
+    def add_tracks_to_playlist(self, playlist_id: str, track_ids: list) -> bool
+    
+    # 内部メソッド
+    def _format_date(self) -> str
+```
+
+### 5. SpotifyClient
+**責任**: Spotify API呼び出しの統一インターface
+```python
+class SpotifyClient:
+    def __init__(self, token_info: dict)
+    def get_current_user(self) -> dict
+    def create_playlist(self, user_id: str, name: str, public: bool = False) -> dict
+    def add_tracks_to_playlist(self, playlist_id: str, track_uris: list) -> dict
+    def get_recommendations(self, **kwargs) -> dict
+    def search(self, query: str, type: str, limit: int = 50) -> dict
+    def get_audio_features(self, track_ids: list) -> list
+    
+    # 内部メソッド
+    def _make_request(self, method: str, url: str, **kwargs) -> dict
+    def _handle_rate_limit(self, response) -> None
+```
+
+### 6. EmotionMusicApp (メインアプリケーション)
+**責任**: 全体の処理フローを制御
+```python
+class EmotionMusicApp:
+    def __init__(self, client_id: str, client_secret: str, redirect_uri: str)
+    def start_authentication(self) -> str
+    def complete_authentication(self, authorization_code: str) -> bool
+    def create_emotion_playlist(self, emotion_text: str) -> dict
+    def get_user_info(self) -> dict
+    
+    # 内部メソッド
+    def _initialize_components(self) -> None
+    def _validate_session(self) -> bool
+```
+
+## データフロー
+
+1. **認証フロー**
+   ```
+   EmotionMusicApp → SpotifyAuthenticator → Spotify API
+   ```
+
+2. **プレイリスト作成フロー**
+   ```
+   EmotionMusicApp → EmotionAnalyzer → SpotifyMusicRecommender → PlaylistManager → SpotifyClient → Spotify API
+   ```
+
+## エラーハンドリング戦略
+
+### カスタム例外クラス
+```python
+class SpotifyAuthError(Exception): pass
+class EmotionAnalysisError(Exception): pass  
+class RecommendationError(Exception): pass
+class PlaylistCreationError(Exception): pass
+class RateLimitError(Exception): pass
+```
+
+### エラー対応レベル
+- **ネットワークエラー**: リトライ機能（最大3回）
+- **API制限**: Rate Limitの自動処理とユーザー通知
+- **認証エラー**: 再認証フローへの誘導
+- **推薦失敗**: 代替推薦手法の実行
+
+## 設定管理
+
+### ConfigManager
+```python
+class ConfigManager:
+    EMOTION_MAPPING = {
+        "嬉しい": {"valence": 0.8, "energy": 0.7, "danceability": 0.6},
+        "悲しい": {"valence": 0.2, "energy": 0.3, "danceability": 0.3},
+        "リラックス": {"valence": 0.5, "energy": 0.2, "danceability": 0.3},
+        "エネルギッシュ": {"valence": 0.7, "energy": 0.9, "danceability": 0.8},
+        "ロマンティック": {"valence": 0.6, "energy": 0.4, "danceability": 0.4}
+    }
+    
+    GENRE_MAPPING = {
+        "嬉しい": ["pop", "dance", "funk"],
+        "悲しい": ["sad", "indie", "alternative"],
+        "リラックス": ["chill", "ambient", "jazz"],
+        "エネルギッシュ": ["electronic", "rock", "hip-hop"],
+        "ロマンティック": ["r-n-b", "soul", "acoustic"]
+    }
+```
+
+## 次のステップ
+
+1. **Phase 1**: 基本クラス実装（SpotifyAuthenticator, SpotifyClient）
+2. **Phase 2**: 感情分析と推薦機能（EmotionAnalyzer, SpotifyMusicRecommender）
+3. **Phase 3**: プレイリスト作成（PlaylistManager）
+4. **Phase 4**: メインアプリケーション統合（EmotionMusicApp）
+5. **Phase 5**: エラーハンドリングとテスト
+
+この設計により、各機能が独立して開発・テスト可能で、将来的な機能拡張にも対応できる構造になっています。
