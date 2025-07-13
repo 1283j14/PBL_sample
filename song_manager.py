@@ -5,12 +5,17 @@ class SongManager:
     """楽曲データ管理クラス"""
     def __init__(self):
         self.songs = [
-            Song("ブルーバード", "いきものがかり", "https://via.placeholder.com/250x250/4CAF50/white?text=ブルーバード"),
-            Song("Pretender", "Official髭男dism", "https://via.placeholder.com/250x250/2196F3/white?text=Pretender"),
-            Song("Lemon", "米津玄師", "https://via.placeholder.com/250x250/FF9800/white?text=Lemon"),
-            Song("夜に駆ける", "YOASOBI", "https://via.placeholder.com/250x250/9C27B0/white?text=夜に駆ける"),
-            Song("炎", "LiSA", "https://via.placeholder.com/250x250/F44336/white?text=炎"),
-            Song("紅蓮華", "LiSA", "https://via.placeholder.com/250x250/E91E63/white?text=紅蓮華"),
+            # image_urlの後に、spotify_id=None, preview_url=None, spotify_uri='...' を追加
+            Song("ブルーバード", "いきものがかり", "https://via.placeholder.com/250x250/4CAF50/white?text=ブルーバード",
+                 spotify_id="7rVjP6H6g8pQ8fN3Jg9n", # 例: 適当なID。Spotifyの実際のIDに置き換える
+                 preview_url="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+                 spotify_uri="spotify:track:YOUR_BLUEBIRD_URI"), # <-- 実際のURIに置き換える
+            Song("Pretender", "Official髭男dism", "https://via.placeholder.com/250x250/2196F3/white?text=Pretender",
+                 spotify_id="2K98C8W3qDkL2Q3w4q5y", # 例: 適当なID。
+                 preview_url="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3",
+                 spotify_uri="spotify:track:YOUR_PRETENDER_URI"), # <-- 実際のURIに置き換える
+            # 他の曲も同様に spotify_id と spotify_uri を追加
+            # Spotify APIから取得する際はこれらの情報が提供されます
         ]
         self.current_index = 0
     
