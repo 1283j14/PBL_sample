@@ -16,7 +16,7 @@ from swipeable_widget import SwipeableWidget
 from song_display_widget import SongDisplayWidget
 from playlist_widget import PlaylistWidget
 from spotify_auth import SpotifyAuthenticator, SpotifyClient
-
+from emotion_song_manager import EmotionSongManager
 
 class PlaylistCreationThread(QThread):
     """プレイリスト作成を別スレッドで実行"""
@@ -124,6 +124,9 @@ class SwipeApp(QWidget):
         self.song_manager = SongManager()
         self.playlist_manager = PlaylistManager()
 
+        # 感情ベース楽曲マネージャーの初期化（追加）
+        self.emotion_song_manager = EmotionSongManager(self.spotify_client)
+        
         # 認証ステータスの表示ラベル
         self.auth_status_label = QLabel("Spotify未認証")
         self.auth_status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -184,6 +187,30 @@ class SwipeApp(QWidget):
         self.playlist_widget = PlaylistWidget()
         self.playlist_widget.setMaximumWidth(300)
         
+        # 感情選択ボタンを認証ボタンの隣に追加
+        auth_bar_layout = QHBoxLayout()
+        auth_bar_layout.addWidget(self.auth_button)
+    
+        # 感情選択ボタンを追加
+        emotion_button = QPushButton("気分で選ぶ")
+        emotion_button.clicked.connect(self.show_emotion_selector)
+        emotion_button.setStyleSheet("""
+            QPushButton {
+                background-color: #FF6B6B;
+                color: white;
+                padding: 10px 20px;
+                border-radius: 5px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #FF5252;
+            }
+            """)
+        auth_bar_layout.addWidget(emotion_button)
+    
+        auth_bar_layout.addWidget(self.auth_status_label)
+        swipe_layout.addLayout(auth_bar_layout)
+
         # メインレイアウトに追加
         main_layout.addWidget(self.swipe_widget, 2)
         main_layout.addWidget(self.playlist_widget, 1)
@@ -442,6 +469,83 @@ class SwipeApp(QWidget):
                 else:
                     print("トークンのリフレッシュに失敗しました")
                     self.update_auth_status(False)
+    
+    # 感情ベース楽曲推薦機能を追加するメソッド
+    def show_emotion_selector(self):
+        """感情選択ダイアログを表示"""
+        emotions = self.emotion_song_manager.get_available_emotions()
+
+        emotion, ok = QInputDialog.getItem(
+            self,
+            "感情選択",
+            "現在の気分を選択してください:",
+        emotions,
+        0,
+        False
+    )
+    
+        if ok and emotion:
+            self.load_emotion_songs(emotion)
+    
+        # 楽曲情報表示の拡張（オプション）
+    def show_current_song_info(self):
+        """現在の楽曲の詳細情報を表示"""
+        current_song = self.song_manager.get_current_song()
+        if current_song and hasattr(current_song, 'spotify_uri') and current_song.spotify_uri:
+            # Spotify URIがある場合、Spotifyアプリで開く
+            try:
+                webbrowser.open(current_song.spotify_uri)
+            except:
+                QMessageBox.information(self, "情報", f"楽曲: {current_song.title}\nアーティスト: {current_song.artist}")
+        else:
+            QMessageBox.information(self, "情報", f"楽曲: {current_song.title}\nアーティスト: {current_song.artist}")
+
+    # song_display_widgetにダブルクリックイベントを追加する場合
+    def connect_signals(self):
+        """シグナルとスロットを接続"""
+        self.swipe_widget.swipe_left.connect(self.on_swipe_left)
+        self.swipe_widget.swipe_right.connect(self.on_swipe_right)
+        self.playlist_widget.create_spotify_playlist.connect(self.on_create_spotify_playlist)
+        
+        # 楽曲表示エリアのダブルクリックで詳細情報を表示（オプション）
+        self.song_display.mouseDoubleClickEvent = lambda event: self.show_current_song_info()
+
+    def load_emotion_songs(self, emotion):
+        """選択された感情に基づいて楽曲を読み込み"""
+        try:
+            # プログレスダイアログの表示
+            progress = QProgressDialog("楽曲を検索中...", "キャンセル", 0, 0, self)
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
+            progress.show()
+            
+            # 感情ベース楽曲を生成
+            self.emotion_song_manager.set_emotion_songs(emotion, limit=20)
+            
+            # 楽曲が見つかった場合、song_managerに設定
+            emotion_songs = self.emotion_song_manager.current_emotion_songs
+            if emotion_songs:
+                # 既存の楽曲リストを置き換え
+                self.song_manager.songs = emotion_songs
+                self.song_manager.current_index = 0
+                
+                # 画面を更新
+                self.load_current_song()
+                
+                description = self.emotion_song_manager.get_emotion_description(emotion)
+                QMessageBox.information(
+                    self,
+                    "楽曲読み込み完了",
+                    f"「{emotion}」の楽曲を{len(emotion_songs)}曲読み込みました。\n\n{description}"
+                )
+            else:
+                QMessageBox.warning(self, "エラー", "該当する楽曲が見つかりませんでした。")
+            
+            progress.close()
+            
+            
+        except Exception as e:
+            QMessageBox.warning(self, "エラー", f"楽曲の読み込み中にエラーが発生しました: {str(e)}")
+
 
 
 if __name__ == "__main__":
