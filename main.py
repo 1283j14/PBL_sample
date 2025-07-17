@@ -108,6 +108,115 @@ class PlaylistCreationThread(QThread):
         except Exception as e:
             self.finished_signal.emit(False, f"エラーが発生しました: {str(e)}")
 
+import sys
+import random
+import os
+import urllib.parse
+import webbrowser
+import requests
+from datetime import datetime
+from PyQt6.QtWidgets import (QApplication, QWidget, QHBoxLayout, QVBoxLayout, 
+                             QMessageBox, QPushButton, QLineEdit, QDialog, QLabel,
+                             QInputDialog, QProgressDialog, QCheckBox)
+from PyQt6.QtCore import QTimer, Qt, QUrl, QThread, pyqtSignal
+from song_manager import SongManager
+from playlist_manager import PlaylistManager
+from swipeable_widget import SwipeableWidget
+from song_display_widget import SongDisplayWidget
+from playlist_widget import PlaylistWidget
+from spotify_auth import SpotifyAuthenticator, SpotifyClient
+from emotion_song_manager import EmotionSongManager
+
+class PlaylistCreationThread(QThread):
+    """プレイリスト作成を別スレッドで実行"""
+    progress_updated = pyqtSignal(str)
+    finished_signal = pyqtSignal(bool, str)
+    
+    def __init__(self, spotify_client, playlist_name, songs, is_public=False):
+        super().__init__()
+        self.spotify_client = spotify_client
+        self.playlist_name = playlist_name
+        self.songs = songs
+        self.is_public = is_public
+        
+    def run(self):
+        try:
+            # ユーザー情報を取得
+            self.progress_updated.emit("ユーザー情報を取得中...")
+            user_info = self.spotify_client.get_current_user()
+            if not user_info:
+                self.finished_signal.emit(False, "ユーザー情報の取得に失敗しました")
+                return
+            
+            user_id = user_info.get("id")
+            self.progress_updated.emit(f"ユーザー: {user_info.get('display_name', user_id)}")
+            
+            # プレイリストを作成
+            self.progress_updated.emit("プレイリストを作成中...")
+            playlist_description = f"MEET une アプリで作成 - {datetime.now().strftime('%Y年%m月%d日')}"
+            playlist_info = self.spotify_client.create_playlist(
+                user_id, 
+                self.playlist_name, 
+                playlist_description, 
+                self.is_public
+            )
+            
+            if not playlist_info:
+                self.finished_signal.emit(False, "プレイリストの作成に失敗しました")
+                return
+            
+            playlist_id = playlist_info.get("id")
+            self.progress_updated.emit(f"プレイリスト「{self.playlist_name}」を作成しました")
+            
+            # 楽曲を検索してURIを取得
+            track_uris = []
+            failed_tracks = []
+            
+            for i, song in enumerate(self.songs):
+                self.progress_updated.emit(f"楽曲を検索中... ({i+1}/{len(self.songs)}): {song}")
+                
+                # 楽曲を検索
+                search_results = self.spotify_client.search_tracks(song, limit=1)
+                if search_results and search_results.get("tracks", {}).get("items"):
+                    track = search_results["tracks"]["items"][0]
+                    track_uris.append(track["uri"])
+                    self.progress_updated.emit(f"✓ 見つかりました: {track['name']} - {track['artists'][0]['name']}")
+                else:
+                    failed_tracks.append(song)
+                    self.progress_updated.emit(f"✗ 見つかりませんでした: {song}")
+            
+            # 見つかった楽曲をプレイリストに追加
+            if track_uris:
+                self.progress_updated.emit("楽曲をプレイリストに追加中...")
+                
+                # Spotify APIは一度に最大100曲まで追加可能
+                for i in range(0, len(track_uris), 100):
+                    batch = track_uris[i:i+100]
+                    result = self.spotify_client.add_tracks_to_playlist(playlist_id, batch)
+                    if not result:
+                        self.finished_signal.emit(False, f"楽曲の追加に失敗しました (バッチ {i//100 + 1})")
+                        return
+                
+                success_count = len(track_uris)
+                failed_count = len(failed_tracks)
+                
+                success_message = f"プレイリスト「{self.playlist_name}」を作成しました！\n\n"
+                success_message += f"✓ 追加された楽曲: {success_count}曲\n"
+                if failed_count > 0:
+                    success_message += f"✗ 見つからなかった楽曲: {failed_count}曲\n"
+                    success_message += f"見つからなかった楽曲: {', '.join(failed_tracks[:3])}"
+                    if len(failed_tracks) > 3:
+                        success_message += f" など{len(failed_tracks)}曲"
+                
+                success_message += f"\n\nSpotifyアプリでプレイリストを確認できます。"
+                
+                self.finished_signal.emit(True, success_message)
+            else:
+                self.finished_signal.emit(False, "追加できる楽曲が見つかりませんでした")
+                
+        except Exception as e:
+            self.finished_signal.emit(False, f"エラーが発生しました: {str(e)}")
+
 
 class SwipeApp(QWidget):
     """メインアプリケーションクラス"""
@@ -124,7 +233,7 @@ class SwipeApp(QWidget):
         self.song_manager = SongManager()
         self.playlist_manager = PlaylistManager()
 
-        # 感情ベース楽曲マネージャーの初期化（追加）
+        # 感情ベース楽曲マネージャーの初期化
         self.emotion_song_manager = EmotionSongManager(self.spotify_client)
         
         # 認証ステータスの表示ラベル
@@ -175,19 +284,11 @@ class SwipeApp(QWidget):
         self.song_display = SongDisplayWidget()
         swipe_layout.addWidget(self.song_display)
 
-        # 認証ボタンとステータスラベルを左側に追加
-        auth_bar_layout = QHBoxLayout()
-        auth_bar_layout.addWidget(self.auth_button)
-        auth_bar_layout.addWidget(self.auth_status_label)
-        swipe_layout.addLayout(auth_bar_layout)
-
-        self.swipe_widget.setLayout(swipe_layout)
-        
         # 右側：プレイリストエリア
         self.playlist_widget = PlaylistWidget()
         self.playlist_widget.setMaximumWidth(300)
         
-        # 感情選択ボタンを認証ボタンの隣に追加
+        # 認証ボタンとステータスラベル、感情選択ボタンを配置
         auth_bar_layout = QHBoxLayout()
         auth_bar_layout.addWidget(self.auth_button)
     
@@ -205,11 +306,12 @@ class SwipeApp(QWidget):
             QPushButton:hover {
                 background-color: #FF5252;
             }
-            """)
+        """)
         auth_bar_layout.addWidget(emotion_button)
-    
         auth_bar_layout.addWidget(self.auth_status_label)
+        
         swipe_layout.addLayout(auth_bar_layout)
+        self.swipe_widget.setLayout(swipe_layout)
 
         # メインレイアウトに追加
         main_layout.addWidget(self.swipe_widget, 2)
@@ -222,6 +324,9 @@ class SwipeApp(QWidget):
         self.swipe_widget.swipe_left.connect(self.on_swipe_left)
         self.swipe_widget.swipe_right.connect(self.on_swipe_right)
         self.playlist_widget.create_spotify_playlist.connect(self.on_create_spotify_playlist)
+        
+        # 楽曲表示エリアのダブルクリックで詳細情報を表示（オプション）
+        self.song_display.mouseDoubleClickEvent = lambda event: self.show_current_song_info()
     
     def load_current_song(self):
         """現在の楽曲を読み込み"""
@@ -252,7 +357,7 @@ class SwipeApp(QWidget):
             self.load_current_song()
     
     def on_create_spotify_playlist(self):
-        """Spotifyプレイリスト作成（実際の実装）"""
+        """Spotifyプレイリスト作成"""
         liked_songs = self.playlist_manager.get_songs()
         
         if not liked_songs:
@@ -285,7 +390,7 @@ class SwipeApp(QWidget):
         layout.addWidget(QLabel(f"楽曲数: {len(liked_songs)}曲"))
         
         public_checkbox = QCheckBox("公開プレイリストにする")
-        public_checkbox.setChecked(False)  # デフォルトは非公開
+        public_checkbox.setChecked(False)
         layout.addWidget(public_checkbox)
         
         button_layout = QHBoxLayout()
@@ -307,10 +412,10 @@ class SwipeApp(QWidget):
         is_public = public_checkbox.isChecked()
         
         # プログレスダイアログの作成
-        progress_dialog = QProgressDialog("プレイリストを作成中...", "キャンセル", 0, 0, self)
-        progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
-        progress_dialog.setMinimumDuration(0)
-        progress_dialog.setValue(0)
+        self.progress_dialog = QProgressDialog("プレイリストを作成中...", "キャンセル", 0, 0, self)
+        self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        self.progress_dialog.setMinimumDuration(0)
+        self.progress_dialog.setValue(0)
         
         # プレイリスト作成スレッドを開始
         self.creation_thread = PlaylistCreationThread(
@@ -321,16 +426,18 @@ class SwipeApp(QWidget):
         )
         
         # スレッドのシグナルを接続
-        self.creation_thread.progress_updated.connect(progress_dialog.setLabelText)
-        self.creation_thread.finished_signal.connect(
-            lambda success, message: self.on_playlist_creation_finished(success, message, progress_dialog)
-        )
+        self.creation_thread.progress_updated.connect(self.progress_dialog.setLabelText)
+        self.creation_thread.finished_signal.connect(self.handle_playlist_creation_finished)
         
         # キャンセル処理
-        progress_dialog.canceled.connect(self.creation_thread.quit)
+        self.progress_dialog.canceled.connect(self.creation_thread.quit)
         
         self.creation_thread.start()
-        progress_dialog.exec()
+        self.progress_dialog.exec()
+    
+    def handle_playlist_creation_finished(self, success, message):
+        """プレイリスト作成完了時の処理"""
+        self.on_playlist_creation_finished(success, message, self.progress_dialog)
     
     def on_playlist_creation_finished(self, success, message, progress_dialog):
         """プレイリスト作成完了時の処理"""
@@ -470,7 +577,6 @@ class SwipeApp(QWidget):
                     print("トークンのリフレッシュに失敗しました")
                     self.update_auth_status(False)
     
-    # 感情ベース楽曲推薦機能を追加するメソッド
     def show_emotion_selector(self):
         """感情選択ダイアログを表示"""
         emotions = self.emotion_song_manager.get_available_emotions()
@@ -479,15 +585,14 @@ class SwipeApp(QWidget):
             self,
             "感情選択",
             "現在の気分を選択してください:",
-        emotions,
-        0,
-        False
-    )
+            emotions,
+            0,
+            False
+        )
     
         if ok and emotion:
             self.load_emotion_songs(emotion)
     
-        # 楽曲情報表示の拡張（オプション）
     def show_current_song_info(self):
         """現在の楽曲の詳細情報を表示"""
         current_song = self.song_manager.get_current_song()
@@ -499,16 +604,6 @@ class SwipeApp(QWidget):
                 QMessageBox.information(self, "情報", f"楽曲: {current_song.title}\nアーティスト: {current_song.artist}")
         else:
             QMessageBox.information(self, "情報", f"楽曲: {current_song.title}\nアーティスト: {current_song.artist}")
-
-    # song_display_widgetにダブルクリックイベントを追加する場合
-    def connect_signals(self):
-        """シグナルとスロットを接続"""
-        self.swipe_widget.swipe_left.connect(self.on_swipe_left)
-        self.swipe_widget.swipe_right.connect(self.on_swipe_right)
-        self.playlist_widget.create_spotify_playlist.connect(self.on_create_spotify_playlist)
-        
-        # 楽曲表示エリアのダブルクリックで詳細情報を表示（オプション）
-        self.song_display.mouseDoubleClickEvent = lambda event: self.show_current_song_info()
 
     def load_emotion_songs(self, emotion):
         """選択された感情に基づいて楽曲を読み込み"""
@@ -542,10 +637,8 @@ class SwipeApp(QWidget):
             
             progress.close()
             
-            
         except Exception as e:
             QMessageBox.warning(self, "エラー", f"楽曲の読み込み中にエラーが発生しました: {str(e)}")
-
 
 
 if __name__ == "__main__":
